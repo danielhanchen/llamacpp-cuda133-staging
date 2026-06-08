@@ -176,13 +176,12 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Resolved $REQ -> $TAG ($COMMIT); release exists=$EXISTS; only=$ONLY; gfx=$GFX"
 
-  build-cuda:
-    name: CUDA
+  build-macos:
+    name: macOS
     needs: resolve
     if: ${{ needs.resolve.outputs.exists != 'true' || github.event_name == 'workflow_dispatch' }}
-    uses: ./.github/workflows/unsloth-prebuilt-cuda.yml
+    uses: ./.github/workflows/unsloth-prebuilt-macos.yml
     with:
       tag: ${{ needs.resolve.outputs.tag }}
-      commit: ${{ needs.resolve.outputs.commit }}
-      matrix: ${{ needs.resolve.outputs.cuda_matrix }}
+      matrix: ${{ needs.resolve.outputs.macos_matrix }}
 
