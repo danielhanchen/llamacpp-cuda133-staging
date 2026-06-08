@@ -11,8 +11,11 @@
 # under $WORK (default ~/llama_prebuilt_test) and can be deleted afterwards.
 #
 # Usage:   bash spark_confirm.sh
+#   Test the cuda13 path on a box that only has CUDA 12 installed (no sudo,
+#   driver untouched):   INSTALL_CUDA13=1 bash spark_confirm.sh
 # Env overrides: WORK, BUNDLE_URL (force a specific bundle), BUNDLE_SHA256,
-#                GGUF_URL, PORT, CUDA_LIB_DIR (force runtime dir), KEEP=1
+#                GGUF_URL, PORT, CUDA_LIB_DIR (force runtime dir),
+#                INSTALL_CUDA13=1 (stage CUDA 13.0 runtime locally), KEEP=1
 #
 set -uo pipefail
 
@@ -37,6 +40,24 @@ bad(){  printf '  [FAIL] %s\n' "$*"; FAIL_N=$((FAIL_N+1)); }
 warn(){ printf '  [WARN] %s\n' "$*"; WARN_N=$((WARN_N+1)); }
 info(){ printf '         %s\n' "$*"; }
 hr(){   printf -- '---------------------------------------------------------------\n'; }
+
+# Stage the CUDA 13.0 runtime (cudart + cublas) into $1/  from NVIDIA's redist
+# CDN. Userspace only: no sudo, no apt, no driver touched. Used by INSTALL_CUDA13=1
+# so a cuda12 box can also exercise the cuda13 bundle.
+install_cuda13_runtime(){
+  local dst="$1" base plat comp ver name; base="https://developer.download.nvidia.com/compute/cuda/redist"
+  case "$ARCH" in aarch64) plat=linux-sbsa;; *) plat=linux-x86_64;; esac
+  mkdir -p "$dst/.tmp"
+  for cv in cuda_cudart:13.0.48 libcublas:13.0.0.19; do
+    comp="${cv%:*}"; ver="${cv#*:}"; name="${comp}-${plat}-${ver}-archive"
+    curl -fsSL -o "$dst/.tmp/c.tar.xz" "$base/${comp}/${plat}/${name}.tar.xz" || return 1
+    tar -xf "$dst/.tmp/c.tar.xz" -C "$dst/.tmp" || return 1
+    cp -a "$dst/.tmp/${name}/lib/." "$dst/" 2>/dev/null
+    rm -rf "$dst/.tmp/${name}" "$dst/.tmp/c.tar.xz"
+  done
+  rm -rf "$dst/.tmp"; [ -e "$dst/libcudart.so.13" ]
+}
+
 cleanup(){ [ -n "$SERVER_PID" ] && kill "$SERVER_PID" >/dev/null 2>&1; [ "$KEEP" != "1" ] && rm -f "$WORK"/*.gguf "$WORK"/bundle.tar.gz >/dev/null 2>&1; }
 trap cleanup EXIT
 
@@ -95,6 +116,12 @@ for mod in ("torch","nvidia.cuda_runtime","nvidia.cublas"):
     except Exception: pass
 PY
 )
+fi
+
+if [ "${INSTALL_CUDA13:-0}" = "1" ]; then
+  info "INSTALL_CUDA13=1 -> staging CUDA 13.0 runtime (cudart 13.0.48 + cublas 13.0.0.19) into $WORK/cuda13-runtime"
+  if install_cuda13_runtime "$WORK/cuda13-runtime"; then ok "CUDA 13.0 runtime staged locally (no sudo, driver untouched)"; CAND_DIRS=("$WORK/cuda13-runtime" "${CAND_DIRS[@]}")
+  else warn "could not stage CUDA 13.0 runtime (network?)"; fi
 fi
 
 find_cudart() {  # echoes a dir containing libcudart.so.$1, or nothing
