@@ -142,12 +142,6 @@ jobs:
           # upstream) which Jimver lacks, so those install via NVIDIA redist in
           # the build children -- on the same runners, so the glibc floor holds.
           ALL='[
-            {"profile":"cuda12-older",   "arch":"x64",  "runner":"ubuntu-22.04",    "line":"cuda12","klass":"older",   "rank":10,"cuda":"12.8.0","toolkit_line":"12.8","archs":"70 75 80 86 89"},
-            {"profile":"cuda12-newer",   "arch":"x64",  "runner":"ubuntu-22.04",    "line":"cuda12","klass":"newer",   "rank":20,"cuda":"12.8.0","toolkit_line":"12.8","archs":"86 89 90 100 120"},
-            {"profile":"cuda12-portable","arch":"x64",  "runner":"ubuntu-22.04",    "line":"cuda12","klass":"portable","rank":30,"cuda":"12.8.0","toolkit_line":"12.8","archs":"70 75 80 86 89 90 100 120"},
-            {"profile":"cuda13-older",   "arch":"x64",  "runner":"ubuntu-22.04",    "line":"cuda13","klass":"older",   "rank":40,"cuda":"13.3","toolkit_line":"13.3","archs":"75 80 86 89"},
-            {"profile":"cuda13-newer",   "arch":"x64",  "runner":"ubuntu-22.04",    "line":"cuda13","klass":"newer",   "rank":50,"cuda":"13.3","toolkit_line":"13.3","archs":"86 89 90 100 120"},
-            {"profile":"cuda13-portable","arch":"x64",  "runner":"ubuntu-22.04",    "line":"cuda13","klass":"portable","rank":60,"cuda":"13.3","toolkit_line":"13.3","archs":"75 80 86 89 90 100 120"},
             {"profile":"cuda13-portable","arch":"arm64","runner":"ubuntu-24.04-arm","line":"cuda13","klass":"portable","rank":60,"cuda":"13.3","toolkit_line":"13.3","archs":"90 100 120 121"}
           ]'
           if [ "$ONLY" = "all" ]; then
