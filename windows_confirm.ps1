@@ -283,9 +283,13 @@ if ($server_exe -and (Test-Path $gguf)) {
   $log = @(); if (Test-Path $errLog) { $log += Get-Content $errLog }; if (Test-Path $outLog) { $log += Get-Content $outLog }
   if ($ready) {
     Ok "server healthy on :$PORT"
-    $gpu = $log | Select-String -Pattern 'offloaded .* layers to GPU|CUDA0|ggml_cuda_init|using device CUDA' | Select-Object -First 4
-    if ($gpu) { $gpu | ForEach-Object { Info $_.Line }; Ok 'CUDA GPU backend is ACTIVE (real GPU offload)' }
-    else { Warn 'no CUDA device lines in the log - running on CPU (no GPU on this host, or backend did not load)'; ($log | Select-String -Pattern 'buffer size|backend|CPU' | Select-Object -First 3) | ForEach-Object { Info $_.Line } }
+    # Check for a CUDA failure FIRST: 'ggml_cuda_init' alone is not proof of
+    # offload - it is logged even when init fails and llama.cpp drops to CPU.
+    $gpuFail = $log | Select-String -Pattern 'failed to initialize CUDA|no CUDA devices|no usable GPU|CUDA error' | Select-Object -First 2
+    $gpuOk   = $log | Select-String -Pattern 'offloaded .* layers to GPU|offloading .* layers to GPU|CUDA0 .*buffer size|found \d+ CUDA device|using device CUDA' | Select-Object -First 4
+    if ($gpuOk -and -not $gpuFail) { $gpuOk | ForEach-Object { Info $_.Line }; Ok 'CUDA GPU backend is ACTIVE (real GPU offload)' }
+    elseif ($gpuFail) { $gpuFail | ForEach-Object { Info $_.Line }; Warn 'CUDA failed to initialize - running on CPU (no GPU on this host, or driver/runtime mismatch)' }
+    else { Warn 'no CUDA offload lines in the log - running on CPU (GPU backend did not load)'; ($log | Select-String -Pattern 'buffer size|backend|CPU' | Select-Object -First 3) | ForEach-Object { Info $_.Line } }
   } else {
     Bad 'server failed to become ready:'; ($log | Select-Object -Last 15) | ForEach-Object { Info $_ }
   }
