@@ -1,0 +1,97 @@
+name: macos-arm64-newsdk
+
+# Build the arm64 macOS slice on the NEWEST macOS runner (macos-26 -> Metal 4
+# SDK) while keeping the load floor at 14.0. The shipped bundle is built on
+# macos-14, whose SDK predates the Metal tensor API, so the newest Apple Silicon
+# (M5) hits `ggml_metal_library_init_from_source: error compiling source` and
+# disables the tensor API at runtime. Building against the Metal 4 SDK should let
+# the tensor-API shader variant compile on M5, while -DCMAKE_OSX_DEPLOYMENT_TARGET
+# keeps the binary loadable on macOS 14+.
+#
+# Publishes app-b9518-m26-macos-arm64.tar.gz to the m5-tensor-test release so it
+# can be re-tested with:
+#   BUNDLE_URL=https://github.com/danielhanchen/llamacpp-cuda133-staging/releases/download/m5-tensor-test/app-b9518-m26-macos-arm64.tar.gz bash macos_confirm.sh
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/macos-arm64-newsdk.yml
+
+permissions:
+  contents: write
+
+env:
+  TAG: b9518
+  ASSET: app-b9518-m26-macos-arm64.tar.gz
+  RELEASE: m5-tensor-test
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - name: Show toolchain (Xcode / Metal SDK)
+        run: |
+          sw_vers
+          xcodebuild -version || true
+          xcrun --sdk macosx --show-sdk-version || true
+          xcrun -sdk macosx metal --version 2>&1 | head -3 || true
+
+      - name: Checkout upstream llama.cpp @ ${{ env.TAG }}
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ env.TAG }}
+          path: src
+          fetch-depth: 0   # full history so the build number bakes in correctly
+
+      - name: Build arm64 (Metal, deployment target 14.0)
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cmake -B build \
+            -DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON
+          cmake --build build --config Release -j "$(sysctl -n hw.logicalcpu)"
+
+      - name: Show minos + arch of the built binary
+        working-directory: src
+        run: |
+          otool -l build/bin/llama-server | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print "minos:",$2; exit}'
+          lipo -archs build/bin/llama-server
+
+      - name: Package bundle
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cp LICENSE build/bin/ 2>/dev/null || true
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          tar -czf "$GITHUB_WORKSPACE/dist/${ASSET}" \
+            -s ",^\.,llama-${TAG}," -C build/bin .
+          ls -la "$GITHUB_WORKSPACE/dist"
+
+      - name: Publish to ${{ env.RELEASE }} release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$RELEASE" --repo "$GITHUB_REPOSITORY" \
+                 --title "M5 Metal tensor-API test (macos-26 SDK build)" \
+                 --notes "arm64 llama.cpp $TAG built on macos-26 (Metal 4 SDK), deploy target 14.0."
+          gh release upload "$RELEASE" "dist/${ASSET}" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Upload artifact (backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: dist/${{ env.ASSET }}
+          if-no-files-found: error
