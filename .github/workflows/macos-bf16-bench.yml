@@ -1,0 +1,55 @@
+name: macos-bf16-bench
+
+# Run the BF16 flag A/B (mac_bf16_bench.sh) on the free GitHub macOS arm64
+# runners, which are Apple M1 (Virtual) - the chip where bf16 is reportedly
+# slower (no native bf16 ALUs). Our own test Macs are M3/M5 (native bf16), so
+# this is where any penalty would actually show. Also dumps the per-config
+# device info (Metal active? use bfloat?) from the server logs.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/macos-bf16-bench.yml
+      - mac_bf16_bench.sh
+
+jobs:
+  bench:
+    name: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, macos-15, macos-26]   # all Apple M1 arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host info
+        run: |
+          sysctl -n machdep.cpu.brand_string
+          sw_vers
+          uname -m
+
+      - name: BF16 A/B bench (keep logs)
+        run: KEEP=1 REPEATS=3 bash mac_bf16_bench.sh 2>&1 | tee bf16_bench.txt
+
+      - name: Device / Metal / bfloat info from server logs
+        if: always()
+        run: |
+          for f in "$HOME"/llama_bf16_test/srv_*.log; do
+            [ -f "$f" ] || continue
+            echo "===== $(basename "$f") ====="
+            grep -iE "MTL[0-9]|device_info|bfloat|^.*ggml_metal|BLAS|CPU +:|system_info|error compiling" "$f" | head -15
+          done
+
+      - name: Upload results + logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bf16-bench-${{ matrix.runner }}
+          path: |
+            bf16_bench.txt
+            ~/llama_bf16_test/srv_*.log
+          if-no-files-found: warn
