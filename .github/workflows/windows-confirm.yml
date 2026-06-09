@@ -1,12 +1,13 @@
 name: windows-confirm
 
-# Exercise windows_confirm.ps1 on GitHub-hosted Windows runners. These runners
-# have NO NVIDIA GPU, so the script cannot reach "RESULT: CONFIRMED" (missing
-# nvidia-smi is a hard FAIL, exactly like spark_confirm.sh). What this validates
-# is the plumbing that real-hardware runs depend on: it forces WIN_RUNTIME=13.3
-# so the upstream ggml-org build + paired cudart zip are downloaded, extracted
-# side by side, and `llama-server.exe --version` runs. The GPU-offload PASS still
-# needs a real Windows + NVIDIA box.
+# Exercise windows_confirm.ps1 on GitHub-hosted Windows runners (no NVIDIA GPU).
+# Two modes:
+#   cpu-auto    : no WIN_RUNTIME, so the script auto-detects "no CUDA" and falls
+#                 back to the upstream CPU build - this CAN reach RESULT: CONFIRMED
+#                 (CPU build), the realistic GPU-less path.
+#   cuda-forced : WIN_RUNTIME=13.3 forces the CUDA zip + paired cudart download so
+#                 the CUDA download/extract/version plumbing is validated. GPU
+#                 offload itself still needs a real Windows + NVIDIA box.
 
 on:
   workflow_dispatch:
@@ -18,18 +19,22 @@ on:
 
 jobs:
   confirm:
-    name: ${{ matrix.runner }}
+    name: ${{ matrix.runner }} (${{ matrix.mode }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        runner:
-          - windows-2022   # Server 2022 image
-          - windows-2025   # Server 2025 image
+        include:
+          - runner: windows-2022
+            mode: cpu-auto
+            win_runtime: ""
+          - runner: windows-2025
+            mode: cuda-forced
+            win_runtime: "13.3"
     env:
       WIN_TAG: b9518
-      WIN_RUNTIME: "13.3"   # force the download path on a GPU-less runner
+      WIN_RUNTIME: ${{ matrix.win_runtime }}
     steps:
       - uses: actions/checkout@v4
 
@@ -40,29 +45,42 @@ jobs:
           [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./windows_confirm.ps1).Path, [ref]$t, [ref]$e)
           if ($e.Count) { $e | ForEach-Object { Write-Host $_.Message }; exit 1 } else { Write-Host "PARSE OK" }
 
-      - name: Run Windows prebuilt confirmation (plumbing; no GPU on this runner)
+      - name: Run Windows prebuilt confirmation (no GPU on this runner)
         shell: pwsh
         run: |
           ./windows_confirm.ps1 *>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE/confirm_output.txt"
 
-      - name: Assert plumbing (download + extract + binary runs)
+      - name: Assert CPU build CONFIRMED
+        if: matrix.mode == 'cpu-auto'
+        shell: pwsh
+        run: |
+          $log = Get-Content "$env:GITHUB_WORKSPACE/confirm_output.txt" -Raw
+          if ($log -match 'RESULT: CONFIRMED' -and $log -match 'CPU prebuilt runs on this box') {
+            Write-Host "OK: ${{ matrix.runner }} auto-selected and confirmed the CPU build (no GPU on this runner)"
+          } else {
+            Write-Host "::error::${{ matrix.runner }} did not confirm the CPU fallback build"
+            ($log -split "`n" | Select-String -Pattern 'RESULT:|PASS:|FAIL:|\[FAIL\]|selection :') | ForEach-Object { Write-Host $_.Line }
+            exit 1
+          }
+
+      - name: Assert CUDA plumbing (download + extract + binary runs)
+        if: matrix.mode == 'cuda-forced'
         shell: pwsh
         run: |
           $log = Get-Content "$env:GITHUB_WORKSPACE/confirm_output.txt" -Raw
           $need = @('downloaded binaries', 'extracted (llama-server.exe', 'binary runs')
           $missing = $need | Where-Object { $log -notmatch [regex]::Escape($_) }
           if ($missing) {
-            Write-Host "::error::${{ matrix.runner }} plumbing check failed; missing: $($missing -join '; ')"
-            Write-Host '----- summary -----'
-            ($log -split "`n" | Select-String -Pattern 'RESULT:|PASS:|FAIL:|\[FAIL\]|\[PASS\]') | ForEach-Object { Write-Host $_.Line }
+            Write-Host "::error::${{ matrix.runner }} CUDA plumbing failed; missing: $($missing -join '; ')"
+            ($log -split "`n" | Select-String -Pattern 'RESULT:|PASS:|FAIL:|\[FAIL\]') | ForEach-Object { Write-Host $_.Line }
             exit 1
           }
-          Write-Host "OK: ${{ matrix.runner }} downloaded, extracted, and ran the upstream Windows CUDA build (GPU offload needs real hardware)"
+          Write-Host "OK: ${{ matrix.runner }} downloaded, extracted, and ran the upstream CUDA build (GPU offload needs real hardware)"
 
       - name: Upload confirm log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: confirm-${{ matrix.runner }}
+          name: confirm-${{ matrix.runner }}-${{ matrix.mode }}
           path: confirm_output.txt
           if-no-files-found: warn

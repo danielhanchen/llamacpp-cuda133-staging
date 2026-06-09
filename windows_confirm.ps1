@@ -114,7 +114,7 @@ if ($smi) {
   if ($caps) { Ok 'GPU(s) visible via nvidia-smi' } else { Warn 'nvidia-smi ran but listed no GPUs' }
   Info 'note: the driver CUDA version is the max it supports, not the installed runtime - the build is chosen below'
 } else {
-  Bad 'nvidia-smi not found - cannot see the GPU (install the NVIDIA driver)'
+  Warn 'nvidia-smi not found - no NVIDIA GPU detected; will confirm the CPU build (install the driver if you do have a GPU)'
 }
 $blackwell = @($caps | Where-Object { [double]($_ -replace '[^0-9.]','') -ge 12.0 }).Count -gt 0
 Hr
@@ -166,7 +166,7 @@ Hr
 # 3. Select + download the upstream build (binaries + paired cudart)
 # --------------------------------------------------------------------------- #
 Bold '3) Select + download the Windows CUDA prebuilt'
-$useTag = $TAG; $rt = $env:WIN_RUNTIME; $reason = ''
+$useTag = $TAG; $rt = $env:WIN_RUNTIME; $reason = ''; $cpuBuild = $false
 if ($LLAMA_URL) {
   $reason = 'forced via LLAMA_URL/BUNDLE_URL'
 } elseif ($rt) {
@@ -182,17 +182,24 @@ if ($LLAMA_URL) {
   } elseif ($has12) {
     $rt = '12.4'; $reason = "selecting cuda-12.4 (driver CUDA $driverMaj.$driverMin)"
   } else {
-    Bad 'no driver-supported CUDA build (need a 12.4+ or 13.x NVIDIA driver), or set WIN_RUNTIME=13.3'
+    # No CUDA runtime/driver: fall back to the upstream CPU build, like the installer.
+    $cpuBuild = $true; $reason = 'no NVIDIA CUDA runtime/driver detected - selecting the CPU build'
   }
 }
-if (-not $LLAMA_URL -and $rt) {
-  $LLAMA_URL  = "https://github.com/$REPO/releases/download/$useTag/llama-$useTag-bin-win-cuda-$rt-x64.zip"
-  if (-not $CUDART_URL) { $CUDART_URL = "https://github.com/$REPO/releases/download/$useTag/cudart-llama-bin-win-cuda-$rt-x64.zip" }
+if (-not $LLAMA_URL) {
+  if ($cpuBuild) {
+    $LLAMA_URL = "https://github.com/$REPO/releases/download/$TAG/llama-$TAG-bin-win-cpu-x64.zip"
+  } elseif ($rt) {
+    $LLAMA_URL = "https://github.com/$REPO/releases/download/$useTag/llama-$useTag-bin-win-cuda-$rt-x64.zip"
+    if (-not $CUDART_URL) { $CUDART_URL = "https://github.com/$REPO/releases/download/$useTag/cudart-llama-bin-win-cuda-$rt-x64.zip" }
+  }
 }
-# Auto-derive the paired (tag-less) cudart URL from an explicit LLAMA_URL.
+# Auto-derive the paired (tag-less) cudart URL from an explicit CUDA LLAMA_URL.
 if ($LLAMA_URL -and -not $CUDART_URL -and $LLAMA_URL -match 'llama-[^/]*-bin-win-cuda-\d+\.\d+-x64\.zip') {
   $CUDART_URL = ($LLAMA_URL -replace 'llama-[^/]*-bin-win-cuda-', 'cudart-llama-bin-win-cuda-')
 }
+# A forced CPU LLAMA_URL is a CPU build too (no cudart pairing).
+if ($LLAMA_URL -match 'bin-win-cpu') { $cpuBuild = $true }
 if ($reason) { Info "selection : $reason" }
 if (-not $LLAMA_URL) { Bad 'could not determine a build to download'; }
 else {
@@ -231,8 +238,10 @@ Hr
 # --------------------------------------------------------------------------- #
 # 5. DLL presence (CUDA backend + runtime sit next to the exe)
 # --------------------------------------------------------------------------- #
-Bold '5) CUDA backend + runtime DLLs'
-if ($server_exe) {
+Bold '5) Backend + runtime DLLs'
+if ($cpuBuild) {
+  Info 'CPU build - no CUDA backend or runtime DLLs expected'
+} elseif ($server_exe) {
   $bindir = $server_exe.Directory.FullName
   $ggml   = Get-ChildItem -Path $bindir -Filter 'ggml-cuda.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
   $cudart = Get-ChildItem -Path $bindir -Filter 'cudart64_*.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -283,6 +292,9 @@ if ($server_exe -and (Test-Path $gguf)) {
   $log = @(); if (Test-Path $errLog) { $log += Get-Content $errLog }; if (Test-Path $outLog) { $log += Get-Content $outLog }
   if ($ready) {
     Ok "server healthy on :$PORT"
+    if ($cpuBuild) {
+      Info 'CPU build (no CUDA) - inference runs on CPU as expected'
+    } else {
     # 'ggml_cuda_init' alone is not proof of offload - it is logged even when init
     # fails and llama.cpp drops to CPU. Require a real offload marker, and treat
     # "GPU visible but no offload" as a FAIL (the build silently ran on CPU).
@@ -299,6 +311,7 @@ if ($server_exe -and (Test-Path $gguf)) {
     } else {
       Warn 'no CUDA offload lines in the log - running on CPU (no GPU on this host)'
       ($log | Select-String -Pattern 'buffer size|backend|CPU' | Select-Object -First 3) | ForEach-Object { Info $_.Line }
+    }
     }
   } else {
     Bad 'server failed to become ready:'; ($log | Select-Object -Last 15) | ForEach-Object { Info $_ }
@@ -342,7 +355,9 @@ Bold '=== SUMMARY ==='
 Write-Host "host: $arch   build: $(if($LLAMA_URL){[IO.Path]::GetFileName(([uri]$LLAMA_URL).AbsolutePath)}else{'none'})"
 Write-Host "PASS: $script:PASS_N   WARN: $script:WARN_N   FAIL: $script:FAIL_N"
 Write-Host ''
-if ($script:FAIL_N -eq 0) { Bold 'RESULT: CONFIRMED - prebuilt runs on this box.' }
-else { Bold "RESULT: $script:FAIL_N hard failure(s) - paste this whole output back." }
+if ($script:FAIL_N -eq 0) {
+  if ($cpuBuild) { Bold 'RESULT: CONFIRMED - CPU prebuilt runs on this box (no NVIDIA GPU detected).' }
+  else { Bold 'RESULT: CONFIRMED - prebuilt runs on this box.' }
+} else { Bold "RESULT: $script:FAIL_N hard failure(s) - paste this whole output back." }
 Write-Host "(server logs: $errLog ; $outLog)"
 exit 0
