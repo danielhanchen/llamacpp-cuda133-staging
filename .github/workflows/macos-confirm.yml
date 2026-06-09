@@ -42,7 +42,7 @@ jobs:
           set -o pipefail
           bash macos_confirm.sh 2>&1 | tee confirm_output.txt
 
-      - name: Assert CONFIRMED (FAIL: 0)
+      - name: "Assert CONFIRMED (FAIL count zero)"
         run: |
           if grep -q "RESULT: CONFIRMED" confirm_output.txt && grep -qE "FAIL: 0([^0-9]|$)" confirm_output.txt; then
             echo "OK: ${{ matrix.runner }} confirmed the macOS prebuilt"
