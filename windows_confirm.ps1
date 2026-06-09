@@ -292,38 +292,46 @@ if ($server_exe -and (Test-Path $gguf)) {
   $log = @(); if (Test-Path $errLog) { $log += Get-Content $errLog }; if (Test-Path $outLog) { $log += Get-Content $outLog }
   if ($ready) {
     Ok "server healthy on :$PORT"
-    if ($cpuBuild) {
-      Info 'CPU build (no CUDA) - inference runs on CPU as expected'
-    } else {
-    # 'ggml_cuda_init' alone is not proof of offload - it is logged even when init
-    # fails and llama.cpp drops to CPU. Require a real offload marker, and treat
-    # "GPU visible but no offload" as a FAIL (the build silently ran on CPU).
-    $gpuVisible = ($caps.Count -gt 0)
-    $gpuFail = $log | Select-String -Pattern 'failed to initialize CUDA|no CUDA devices|no usable GPU|CUDA error' | Select-Object -First 3
-    $gpuOk   = $log | Select-String -Pattern 'offloaded .* layers to GPU|offloading .* layers to GPU|CUDA0 .*buffer size|found \d+ CUDA device|using device CUDA' | Select-Object -First 4
-    if ($gpuOk -and -not $gpuFail) {
-      $gpuOk | ForEach-Object { Info $_.Line }; Ok 'CUDA GPU backend is ACTIVE (real GPU offload)'
-    } elseif ($gpuVisible) {
-      Bad 'GPU is visible via nvidia-smi but the prebuilt ran on CPU (no GPU offload) - this build does not use your GPU'
-      ($log | Select-String -Pattern 'cuda|device|offload|buffer|backend|error|tensor' | Select-Object -First 16) | ForEach-Object { Info $_.Line }
-    } elseif ($gpuFail) {
-      $gpuFail | ForEach-Object { Info $_.Line }; Warn 'CUDA failed to initialize - running on CPU (no GPU on this host)'
-    } else {
-      Warn 'no CUDA offload lines in the log - running on CPU (no GPU on this host)'
-      ($log | Select-String -Pattern 'buffer size|backend|CPU' | Select-Object -First 3) | ForEach-Object { Info $_.Line }
-    }
-    }
-  } else {
-    Bad 'server failed to become ready:'; ($log | Select-Object -Last 15) | ForEach-Object { Info $_ }
-  }
-  if ($ready) {
+    # Generate first so we can report real throughput. llama.cpp's new auto-fit
+    # flow ('fitting params to device memory') no longer prints the old
+    # 'offloaded N/N layers to GPU' / 'model buffer size' lines, so throughput
+    # plus device enumeration - not those lines - is how we tell GPU from CPU.
+    $content = ''; $tps = $null
     try {
       $body = @{ messages=@(@{role='user';content='In one short sentence, what is the capital of Japan?'}); max_tokens=40; temperature=0 } | ConvertTo-Json -Depth 6
       $r = Invoke-RestMethod "http://127.0.0.1:$PORT/v1/chat/completions" -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 120
       $content = $r.choices[0].message.content
-      Info "model reply: $content"
-      if ($content -match '(?i)tokyo') { Ok 'coherent generation (mentions Tokyo)' } else { Warn 'answer unexpected' }
+      if (($r.PSObject.Properties.Name -contains 'timings') -and $r.timings.predicted_per_second) { $tps = [math]::Round([double]$r.timings.predicted_per_second, 1) }
     } catch { Warn "generation request failed: $_" }
+    # Re-read the log (now has load + timing lines); parse gen tok/s if absent above.
+    $log = @(); if (Test-Path $errLog) { $log += Get-Content $errLog }; if (Test-Path $outLog) { $log += Get-Content $outLog }
+    if (-not $tps) { $m = ($log | Select-String -Pattern 'eval time =.*?([\d.]+) tokens per second' | Select-Object -Last 1); if ($m) { $tps = [math]::Round([double]$m.Matches[0].Groups[1].Value, 1) } }
+    $tpsTxt = if ($tps) { " (generation $tps tok/s)" } else { "" }
+
+    if ($cpuBuild) {
+      Info "CPU build (no CUDA) - inference runs on CPU as expected$tpsTxt"
+    } else {
+      $gpuVisible = ($caps.Count -gt 0)
+      $cudaFail = $log | Select-String -Pattern 'failed to initialize CUDA|no CUDA-capable device|no CUDA devices|no usable GPU|CUDA error' | Select-Object -First 3
+      # device_info lists 'CUDA0 : <name> (... MiB free)' when the GPU is enumerated.
+      $cudaDev  = $log | Select-String -Pattern '-\s*CUDA\d+\s*:.*MiB|using device CUDA|found \d+ CUDA device' | Select-Object -First 4
+      if ($cudaDev -and -not $cudaFail) {
+        $cudaDev | ForEach-Object { Info $_.Line }; Ok "CUDA GPU enumerated and active$tpsTxt"
+      } elseif ($cudaFail) {
+        $cudaFail | ForEach-Object { Info $_.Line }
+        if ($gpuVisible) { Bad "a GPU is present but CUDA failed to initialize - ran on CPU$tpsTxt" }
+        else { Warn "CUDA failed to initialize - running on CPU (no GPU on this host)$tpsTxt" }
+      } elseif ($gpuVisible) {
+        Bad "GPU visible via nvidia-smi but llama.cpp did not enumerate a CUDA device - ran on CPU$tpsTxt"
+        ($log | Select-String -Pattern 'cuda|device|fitting|buffer|backend|error' | Select-Object -First 16) | ForEach-Object { Info $_.Line }
+      } else {
+        Warn "no CUDA device enumerated - running on CPU (no GPU on this host)$tpsTxt"
+      }
+    }
+    if ($content) { Info "model reply: $content"; if ($content -match '(?i)tokyo') { Ok 'coherent generation (mentions Tokyo)' } else { Warn 'answer unexpected' } }
+    else { Warn 'no generation content returned' }
+  } else {
+    Bad 'server failed to become ready:'; ($log | Select-Object -Last 15) | ForEach-Object { Info $_ }
   }
 } else { Bad 'skipped (no exe or model)' }
 Hr

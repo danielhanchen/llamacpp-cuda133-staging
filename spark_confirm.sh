@@ -33,7 +33,7 @@ URL_ARM64_CUDA13="https://github.com/danielhanchen/llamacpp-cuda133-staging/rele
 
 BUNDLE_SHA256="${BUNDLE_SHA256:-}"
 
-PASS_N=0; FAIL_N=0; WARN_N=0; SERVER_PID=""
+PASS_N=0; FAIL_N=0; WARN_N=0; SERVER_PID=""; HAVE_GPU=0
 bold(){ printf '\033[1m%s\033[0m\n' "$*"; }
 ok(){   printf '  [PASS] %s\n' "$*"; PASS_N=$((PASS_N+1)); }
 bad(){  printf '  [FAIL] %s\n' "$*"; FAIL_N=$((FAIL_N+1)); }
@@ -81,6 +81,7 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   info "driver    : $(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)   (nvidia-smi CUDA cap: $(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: \([0-9.]*\).*/\1/p' | head -1))"
   info "GPU(s)    :"
   nvidia-smi --query-gpu=index,name,compute_cap --format=csv,noheader 2>/dev/null | sed 's/^/           - /'
+  HAVE_GPU=1
   ok "GPU(s) visible via nvidia-smi"
   info "note: the nvidia-smi 'CUDA cap' is the DRIVER max, not your installed runtime - the bundle is chosen by the runtime below"
 else
@@ -232,24 +233,32 @@ for i in $(seq 1 90); do
 done
 if [ "$READY" = "1" ]; then
   ok "server healthy on :$PORT"
-  # Honest GPU determination from the server log.
-  GPULINE="$(grep -iE "offloaded .* layers to GPU|CUDA0|ggml_cuda_init|using device CUDA|ARCHS =" "$SRVLOG" | head -4)"
-  if [ -n "$GPULINE" ]; then
-    echo "$GPULINE" | sed 's/^/         /'
-    ok "CUDA GPU backend is ACTIVE (real GPU offload)"
-  else
-    warn "no CUDA device lines in the log - the model is running on CPU (GPU backend did not load)"
-    grep -iE "buffer size|backend|cpu" "$SRVLOG" | head -3 | sed 's/^/         /'
-  fi
-else
-  bad "server failed to become ready:"; tail -15 "$SRVLOG" | sed 's/^/         /'
-fi
-if [ "$READY" = "1" ]; then
+  # Generate first, then judge GPU use. llama.cpp's auto-fit flow ("fitting params
+  # to device memory") stopped printing "offloaded N/N layers to GPU", so we key on
+  # device enumeration + measured throughput, not those lines.
   RESP="$(curl -s "http://127.0.0.1:$PORT/v1/chat/completions" -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"In one short sentence, what is the capital of Japan?"}],"max_tokens":40,"temperature":0}')"
   CONTENT="$(printf '%s' "$RESP" | (python3 -c 'import sys,json;print(json.load(sys.stdin)["choices"][0]["message"]["content"])' 2>/dev/null || echo ""))"
   [ -z "$CONTENT" ] && CONTENT="$(printf '%s' "$RESP" | grep -oE '"content":"[^"]*"' | head -1)"
+  TPS="$(grep -E "tokens per second" "$SRVLOG" | grep -vi "prompt eval" | grep -oE "[0-9.]+ tokens per second" | tail -1 | grep -oE "^[0-9.]+")"
+  TPSTXT=""; [ -n "$TPS" ] && TPSTXT=" (generation ${TPS} tok/s)"
+  CUDA_FAIL="$(grep -iE "failed to initialize CUDA|no CUDA-capable device|no CUDA devices|no usable GPU|CUDA error" "$SRVLOG" | head -3)"
+  CUDA_DEV="$(grep -iE -- "-[[:space:]]*CUDA[0-9]+[[:space:]]*:.*MiB|using device CUDA|found [0-9]+ CUDA device" "$SRVLOG" | head -4)"
+  if [ -n "$CUDA_DEV" ] && [ -z "$CUDA_FAIL" ]; then
+    echo "$CUDA_DEV" | sed 's/^/         /'
+    ok "CUDA GPU enumerated and active${TPSTXT}"
+  elif [ -n "$CUDA_FAIL" ]; then
+    echo "$CUDA_FAIL" | sed 's/^/         /'
+    if [ "$HAVE_GPU" = 1 ]; then bad "a GPU is present but CUDA failed to initialize - ran on CPU${TPSTXT}"; else warn "CUDA failed to initialize - running on CPU (no GPU on this host)${TPSTXT}"; fi
+  elif [ "$HAVE_GPU" = 1 ]; then
+    bad "GPU visible via nvidia-smi but llama.cpp did not enumerate a CUDA device - ran on CPU${TPSTXT}"
+    grep -iE "cuda|device|fitting|buffer|backend|error" "$SRVLOG" | head -12 | sed 's/^/         /'
+  else
+    warn "no CUDA device enumerated - running on CPU (no GPU on this host)${TPSTXT}"
+  fi
   info "model reply: $CONTENT"
   printf '%s' "$CONTENT" | grep -qi "tokyo" && ok "coherent generation (mentions Tokyo)" || warn "answer unexpected"
+else
+  bad "server failed to become ready:"; tail -15 "$SRVLOG" | sed 's/^/         /'
 fi
 hr
 
