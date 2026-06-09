@@ -1,0 +1,62 @@
+name: macos-confirm
+
+# Run the published macOS llama.cpp prebuilt on every free GitHub-hosted macOS
+# runner (both arches, every OS version) and assert real inference works.
+#   arm64 (Apple Silicon, Metal): macos-14, macos-15, macos-26
+#   x64   (Intel, CPU):           macos-15-intel, macos-26-intel
+# macos_confirm.sh auto-picks the arm64/x64 bundle by `uname -m`.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/macos-confirm.yml
+      - macos_confirm.sh
+
+jobs:
+  confirm:
+    name: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-14         # arm64, Sonoma
+          - macos-15         # arm64, Sequoia
+          - macos-26         # arm64, Tahoe
+          - macos-15-intel   # x64,   Sequoia
+          - macos-26-intel   # x64,   Tahoe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host info
+        run: |
+          echo "runner label : ${{ matrix.runner }}"
+          uname -m
+          sw_vers || true
+
+      - name: Run macOS prebuilt confirmation
+        run: |
+          set -o pipefail
+          bash macos_confirm.sh 2>&1 | tee confirm_output.txt
+
+      - name: Assert CONFIRMED (FAIL: 0)
+        run: |
+          if grep -q "RESULT: CONFIRMED" confirm_output.txt && grep -qE "FAIL: 0([^0-9]|$)" confirm_output.txt; then
+            echo "OK: ${{ matrix.runner }} confirmed the macOS prebuilt"
+          else
+            echo "::error::${{ matrix.runner }} did NOT confirm the macOS prebuilt"
+            echo "----- summary -----"
+            grep -E "RESULT:|PASS:|FAIL:|\[FAIL\]" confirm_output.txt || true
+            exit 1
+          fi
+
+      - name: Upload confirm log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: confirm-${{ matrix.runner }}
+          path: confirm_output.txt
+          if-no-files-found: warn
