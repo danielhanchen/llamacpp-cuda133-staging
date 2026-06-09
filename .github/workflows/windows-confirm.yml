@@ -43,12 +43,12 @@ jobs:
       - name: Run Windows prebuilt confirmation (plumbing; no GPU on this runner)
         shell: pwsh
         run: |
-          ./windows_confirm.ps1 *>&1 | Tee-Object -FilePath confirm_output.txt
+          ./windows_confirm.ps1 *>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE/confirm_output.txt"
 
       - name: Assert plumbing (download + extract + binary runs)
         shell: pwsh
         run: |
-          $log = Get-Content confirm_output.txt -Raw
+          $log = Get-Content "$env:GITHUB_WORKSPACE/confirm_output.txt" -Raw
           $need = @('downloaded binaries', 'extracted (llama-server.exe', 'binary runs')
           $missing = $need | Where-Object { $log -notmatch [regex]::Escape($_) }
           if ($missing) {

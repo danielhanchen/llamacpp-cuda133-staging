@@ -79,7 +79,9 @@ function Get-File($url, $out) {
 function HSize($path){ if (Test-Path $path){ '{0:N1} MB' -f ((Get-Item $path).Length/1MB) } else { '?' } }
 
 New-Item -ItemType Directory -Force -Path $WORK | Out-Null
-Set-Location $WORK
+# All file paths below are absolute (Join-Path $WORK ...), so we deliberately do
+# NOT Set-Location into $WORK - that would leak the directory change back to the
+# caller's shell.
 Write-Host ''
 Bold '=== Unsloth llama.cpp CUDA prebuilt confirmation (native Windows) ==='
 Write-Host "scratch dir : $WORK"; Hr
