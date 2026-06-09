@@ -1,0 +1,84 @@
+name: macos-arm64-floor26
+
+# Same as macos-arm64-newsdk (macos-26 Metal 4 SDK, USE_BF16=ON) but with
+# -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0, so the binary can request Metal 4 at
+# runtime and use the tensor API on M5/A19. This is the isolation pair for
+# app-b9518-m26 (identical build, floor 14.0): m26 = tensor API off, f26 =
+# tensor API on. Trade-off: f26 only loads on macOS 26+.
+#
+# Publishes app-b9518-f26-macos-arm64.tar.gz to the m5-tensor-test release.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/macos-arm64-floor26.yml
+
+permissions:
+  contents: write
+
+env:
+  TAG: b9518
+  ASSET: app-b9518-f26-macos-arm64.tar.gz
+  RELEASE: m5-tensor-test
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - name: Checkout upstream llama.cpp @ ${{ env.TAG }}
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ env.TAG }}
+          path: src
+          fetch-depth: 0
+
+      - name: Build arm64 (Metal, BF16 ON, deployment target 26.0)
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cmake -B build \
+            -DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON
+          cmake --build build --config Release -j "$(sysctl -n hw.logicalcpu)"
+
+      - name: Show minos + arch
+        working-directory: src
+        run: |
+          otool -l build/bin/llama-server | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print "minos:",$2; exit}'
+          lipo -archs build/bin/llama-server
+
+      - name: Package bundle
+        working-directory: src
+        run: |
+          set -euo pipefail
+          cp LICENSE build/bin/ 2>/dev/null || true
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          tar -czf "$GITHUB_WORKSPACE/dist/${ASSET}" -s ",^\.,llama-${TAG}," -C build/bin .
+
+      - name: Publish to ${{ env.RELEASE }} release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$RELEASE" --repo "$GITHUB_REPOSITORY" \
+                 --title "M5 Metal tensor-API test (macos-26 SDK build)" \
+                 --notes "arm64 llama.cpp $TAG built on macos-26, deploy target 26.0."
+          gh release upload "$RELEASE" "dist/${ASSET}" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Upload artifact (backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: dist/${{ env.ASSET }}
+          if-no-files-found: error
