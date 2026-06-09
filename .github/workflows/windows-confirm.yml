@@ -1,0 +1,68 @@
+name: windows-confirm
+
+# Exercise windows_confirm.ps1 on GitHub-hosted Windows runners. These runners
+# have NO NVIDIA GPU, so the script cannot reach "RESULT: CONFIRMED" (missing
+# nvidia-smi is a hard FAIL, exactly like spark_confirm.sh). What this validates
+# is the plumbing that real-hardware runs depend on: it forces WIN_RUNTIME=13.3
+# so the upstream ggml-org build + paired cudart zip are downloaded, extracted
+# side by side, and `llama-server.exe --version` runs. The GPU-offload PASS still
+# needs a real Windows + NVIDIA box.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/windows-confirm.yml
+      - windows_confirm.ps1
+
+jobs:
+  confirm:
+    name: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - windows-2022   # Server 2022 image
+          - windows-2025   # Server 2025 image
+    env:
+      WIN_TAG: b9518
+      WIN_RUNTIME: "13.3"   # force the download path on a GPU-less runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse-check the script
+        shell: pwsh
+        run: |
+          $t=$null; $e=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./windows_confirm.ps1).Path, [ref]$t, [ref]$e)
+          if ($e.Count) { $e | ForEach-Object { Write-Host $_.Message }; exit 1 } else { Write-Host "PARSE OK" }
+
+      - name: Run Windows prebuilt confirmation (plumbing; no GPU on this runner)
+        shell: pwsh
+        run: |
+          ./windows_confirm.ps1 *>&1 | Tee-Object -FilePath confirm_output.txt
+
+      - name: Assert plumbing (download + extract + binary runs)
+        shell: pwsh
+        run: |
+          $log = Get-Content confirm_output.txt -Raw
+          $need = @('downloaded binaries', 'extracted (llama-server.exe', 'binary runs')
+          $missing = $need | Where-Object { $log -notmatch [regex]::Escape($_) }
+          if ($missing) {
+            Write-Host "::error::${{ matrix.runner }} plumbing check failed; missing: $($missing -join '; ')"
+            Write-Host '----- summary -----'
+            ($log -split "`n" | Select-String -Pattern 'RESULT:|PASS:|FAIL:|\[FAIL\]|\[PASS\]') | ForEach-Object { Write-Host $_.Line }
+            exit 1
+          }
+          Write-Host "OK: ${{ matrix.runner }} downloaded, extracted, and ran the upstream Windows CUDA build (GPU offload needs real hardware)"
+
+      - name: Upload confirm log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: confirm-${{ matrix.runner }}
+          path: confirm_output.txt
+          if-no-files-found: warn
