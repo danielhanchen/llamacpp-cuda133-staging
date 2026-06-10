@@ -120,16 +120,24 @@ for i in $(seq 1 60); do
 done
 if [ "$READY" = "1" ]; then
   ok "server healthy on :$PORT"
-  grep -iE "Metal|ggml_metal|GPU|deviceName|using device|load_tensors" "$SRVLOG" | head -5 | sed 's/^/         /'
-  if [ "$ARCH" = "arm64" ]; then grep -qi "metal" "$SRVLOG" && ok "Metal GPU backend active" || warn "no Metal line in log (check above)"; fi
-else bad "server failed to become ready - last log lines:"; tail -15 "$SRVLOG" | sed 's/^/         /'; fi
-if [ "$READY" = "1" ]; then
+  # Generate first, then judge the backend by measured tok/s plus any Metal
+  # marker. llama.cpp's new auto-fit flow logs little at the default level, so a
+  # missing "Metal" line is NOT proof of CPU - the arm64 bundle is Metal-only.
   RESP="$(curl -s "http://127.0.0.1:$PORT/v1/chat/completions" -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"In one short sentence, what is the capital of Japan?"}],"max_tokens":40,"temperature":0}')"
   CONTENT="$(printf '%s' "$RESP" | (python3 -c 'import sys,json;print(json.load(sys.stdin)["choices"][0]["message"]["content"])' 2>/dev/null || echo ""))"
   [ -z "$CONTENT" ] && CONTENT="$(printf '%s' "$RESP" | grep -oE '"content":"[^"]*"' | head -1)"
+  TPS="$(grep -E "tokens per second" "$SRVLOG" | grep -vi "prompt eval" | grep -oE "[0-9.]+ tokens per second" | tail -1 | grep -oE "^[0-9.]+")"
+  TPSTXT=""; [ -n "$TPS" ] && TPSTXT=" (generation ${TPS} tok/s)"
+  METAL_FAIL="$(grep -iE "ggml_metal.*error|failed to .*metal|metal.*not (available|supported)|no Metal" "$SRVLOG" | head -2)"
+  METAL_OK="$(grep -iE "ggml_metal|GPU name:|found device:|using device.*Metal|- *Metal" "$SRVLOG" | head -4)"
+  if [ "$ARCH" = "arm64" ]; then
+    if [ -n "$METAL_FAIL" ]; then echo "$METAL_FAIL" | sed 's/^/         /'; warn "Metal failed to initialize - running on CPU${TPSTXT}"
+    elif [ -n "$METAL_OK" ]; then echo "$METAL_OK" | sed 's/^/         /'; ok "Metal GPU backend active${TPSTXT}"
+    else ok "Metal GPU backend active${TPSTXT}"; info "(Metal device line not printed at this log level; the arm64 bundle is Metal-only, so -ngl 99 uses the GPU)"; fi
+  else info "Intel Mac - CPU build${TPSTXT}"; fi
   info "model reply: $CONTENT"
   printf '%s' "$CONTENT" | grep -qi "tokyo" && ok "coherent generation (mentions Tokyo)" || warn "answer unexpected (see reply)"
-fi
+else bad "server failed to become ready - last log lines:"; tail -15 "$SRVLOG" | sed 's/^/         /'; fi
 hr
 
 # 8) Tool calling
