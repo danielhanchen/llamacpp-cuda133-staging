@@ -79,7 +79,7 @@ if lspci 2>/dev/null | grep -iE "VGA|Display|3D controller" | grep -qiE "$AMD_RE
   lspci 2>/dev/null | grep -iE "VGA|Display|3D controller" | grep -iE "$AMD_RE" | sed 's/^/           - /'
   ok "AMD GPU present (lspci)"
 else
-  warn "no AMD GPU seen via lspci - will confirm the CPU build (or set AMD_GFX to force ROCm)"
+  warn "no AMD GPU on lspci (normal under WSL2 - GPU is paravirtual); selection falls to rocminfo/AMD_GFX"
 fi
 hr
 
@@ -88,8 +88,14 @@ hr
 # --------------------------------------------------------------------------- #
 bold "2) Detect AMD gfx arch"
 GFX="$AMD_GFX"
-if [ -z "$GFX" ] && command -v rocminfo >/dev/null 2>&1; then
-  GFX="$(rocminfo 2>/dev/null | grep -oiE 'gfx[1-9][0-9a-z]{2,3}' | head -1 | tr 'A-Z' 'a-z')"
+# rocminfo may be on PATH or only under /opt/rocm/bin (the ROCDXG profile.d PATH
+# edit reaches login shells only). In WSL2 the system HSA runtime enumerates the
+# GPU over /dev/dxg ONLY when HSA_ENABLE_DXG_DETECTION=1 (harmless no-op on bare
+# metal), so set it for the probe or a ROCDXG box reports no GPU -> false CPU build.
+ROCMINFO="$(command -v rocminfo 2>/dev/null)"
+[ -z "$ROCMINFO" ] && [ -x /opt/rocm/bin/rocminfo ] && ROCMINFO=/opt/rocm/bin/rocminfo
+if [ -z "$GFX" ] && [ -n "$ROCMINFO" ]; then
+  GFX="$(HSA_ENABLE_DXG_DETECTION=1 "$ROCMINFO" 2>/dev/null | grep -oiE 'gfx[1-9][0-9a-z]{2,3}' | head -1 | tr 'A-Z' 'a-z')"
 fi
 if [ -n "$GFX" ]; then
   [ -n "$AMD_GFX" ] && info "gfx (forced): $GFX" || info "gfx (rocminfo): $GFX"
