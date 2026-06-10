@@ -27,9 +27,12 @@ KEEP="${KEEP:-0}"
 ARCH="$(uname -m)"
 
 # Published bundle URLs (auto-selected later by arch + detected cudart major).
-URL_X64_CUDA13="https://github.com/unslothai/llama.cpp/releases/download/b9518/app-b9518-linux-x64-cuda13-portable.tar.gz"
-URL_X64_CUDA12="https://github.com/unslothai/llama.cpp/releases/download/b9493/app-b9493-linux-x64-cuda12-portable.tar.gz"  # b9518 dropped cuda12; b9493 is the last with it
-URL_ARM64_CUDA13="https://github.com/danielhanchen/llamacpp-cuda133-staging/releases/download/spark-test-b9518/app-b9518-linux-arm64-cuda13-portable.tar.gz"
+# TAG overridable: TAG=b9585 bash spark_confirm.sh. b9585+ releases carry the
+# full set (cuda12 restored, arm64 published in-release, version stamp fixed).
+TAG="${TAG:-b9585}"
+URL_X64_CUDA13="https://github.com/unslothai/llama.cpp/releases/download/$TAG/app-$TAG-linux-x64-cuda13-portable.tar.gz"
+URL_X64_CUDA12="https://github.com/unslothai/llama.cpp/releases/download/$TAG/app-$TAG-linux-x64-cuda12-portable.tar.gz"
+URL_ARM64_CUDA13="https://github.com/unslothai/llama.cpp/releases/download/$TAG/app-$TAG-linux-arm64-cuda13-portable.tar.gz"
 
 BUNDLE_SHA256="${BUNDLE_SHA256:-}"
 
@@ -151,7 +154,6 @@ BUNDLE_URL="${BUNDLE_URL:-$DEF_BUNDLE}"
 
 if [ -n "$RT_MAJOR" ]; then
   ok "installed CUDA runtime major = $RT_MAJOR -> selecting the cuda$RT_MAJOR bundle"
-  [ "$RT_MAJOR" = 12 ] && info "(b9518 ships no cuda12 bundle; using b9493, the last release that did - this is the regression)"
 else
   bad "no libcudart.so.12 or .so.13 found - install CUDA or 'pip install torch', or set CUDA_LIB_DIR=/path/to/lib"
 fi
