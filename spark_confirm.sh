@@ -78,7 +78,7 @@ case "$ARCH" in
   *)       warn "unexpected arch '$ARCH' - continuing" ;;
 esac
 if command -v nvidia-smi >/dev/null 2>&1; then
-  info "driver    : $(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)   (nvidia-smi CUDA cap: $(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: \([0-9.]*\).*/\1/p' | head -1))"
+  info "driver    : $(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)   (nvidia-smi CUDA cap: $(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA \(UMD \)*Version: *\([0-9.]*\).*/\2/p' | head -1))"
   info "GPU(s)    :"
   nvidia-smi --query-gpu=index,name,compute_cap --format=csv,noheader 2>/dev/null | sed 's/^/           - /'
   HAVE_GPU=1
