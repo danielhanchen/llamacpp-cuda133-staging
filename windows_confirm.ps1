@@ -104,7 +104,9 @@ $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if (-not $smi) { $sysSmi = Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'; if (Test-Path $sysSmi) { $smi = $sysSmi } }
 if ($smi) {
   $drv = (& $smi --query-gpu=driver_version --format=csv,noheader 2>$null | Select-Object -First 1)
-  $hdr = (& $smi 2>$null | Select-String -Pattern 'CUDA Version:\s*([0-9.]+)' | Select-Object -First 1)
+  # Newer NVIDIA drivers (610.x+) print "CUDA UMD Version:" instead of the legacy
+  # "CUDA Version:"; accept both or the driver CUDA reads empty on those hosts.
+  $hdr = (& $smi 2>$null | Select-String -Pattern 'CUDA(?: UMD)? Version:\s*([0-9.]+)' | Select-Object -First 1)
   $cudaVer = if ($hdr) { $hdr.Matches[0].Groups[1].Value } else { '' }
   if ($cudaVer -match '^(\d+)\.(\d+)') { $driverMaj = [int]$Matches[1]; $driverMin = [int]$Matches[2] }
   Info "driver    : $drv   (driver max CUDA: $cudaVer)"
@@ -175,12 +177,19 @@ if ($LLAMA_URL) {
   # Mirror the installer's driver-gated choice.
   $has13 = $rt13 -or ($driverMaj -ge 13)
   $has12 = $rt12 -or ($driverMaj -gt 12) -or ($driverMaj -eq 12 -and $driverMin -ge 4)
+  $drvTxt = if ($driverMaj) { "$driverMaj.$driverMin" } else { 'unparsed' }
   if ($has13 -and $driverMaj -ge 13 -and (($driverMaj -gt 13) -or ($driverMin -ge 3))) {
-    $rt = '13.3'; $reason = "driver CUDA $driverMaj.$driverMin supports cuda-13.3"
-  } elseif ($has13 -and $blackwell -and $driverMaj -eq 13) {
-    $useTag = $BL_TAG; $rt = $BL_RT; $reason = "Blackwell on a 13.0-13.2 driver: pinned $BL_TAG cuda-$BL_RT (13.3 needs a 13.3 driver)"
+    $rt = '13.3'; $reason = "driver CUDA $drvTxt supports cuda-13.3"
+  } elseif ($blackwell -and $has13) {
+    # Blackwell (sm_120) has no kernels in cuda-12.4 (sm_120 needs toolkit >= 12.8);
+    # on a sub-13.3 (or unparsed) 13.x driver use the pinned cuda-13.1 GPU build,
+    # exactly as the installer's _pinned_windows_cuda_fallback does.
+    $useTag = $BL_TAG; $rt = $BL_RT; $reason = "Blackwell on a 13.0-13.2 driver (CUDA $drvTxt): pinned $BL_TAG cuda-$BL_RT"
+  } elseif ($blackwell) {
+    # Blackwell but no CUDA 13 runtime/driver: cuda-12.4 cannot offload sm_120, so CPU.
+    $cpuBuild = $true; $reason = "Blackwell GPU but no CUDA 13 runtime/driver (CUDA $drvTxt) - selecting the CPU build"
   } elseif ($has12) {
-    $rt = '12.4'; $reason = "selecting cuda-12.4 (driver CUDA $driverMaj.$driverMin)"
+    $rt = '12.4'; $reason = "selecting cuda-12.4 (driver CUDA $drvTxt)"
   } else {
     # No CUDA runtime/driver: fall back to the upstream CPU build, like the installer.
     $cpuBuild = $true; $reason = 'no NVIDIA CUDA runtime/driver detected - selecting the CPU build'
