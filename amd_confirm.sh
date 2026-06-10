@@ -170,7 +170,11 @@ hr
 # --------------------------------------------------------------------------- #
 bold "7) Inference with full offload (-ngl 99)"
 SRVLOG="$WORK/server.log"
-LD_LIBRARY_PATH="$RUNPATH" ${HSA_OVERRIDE_GFX_VERSION:+HSA_OVERRIDE_GFX_VERSION=$HSA_OVERRIDE_GFX_VERSION} \
+# HSA_ENABLE_DXG_DETECTION also on the launch: the b1292 lemonade runtime
+# (HSA 1.21) auto-detects DXG without it, but the system runtime and any
+# older bundled HSA need it in WSL2; a no-op on bare metal.
+LD_LIBRARY_PATH="$RUNPATH" HSA_ENABLE_DXG_DETECTION="${HSA_ENABLE_DXG_DETECTION:-1}" \
+  ${HSA_OVERRIDE_GFX_VERSION:+HSA_OVERRIDE_GFX_VERSION=$HSA_OVERRIDE_GFX_VERSION} \
   "$B/llama-server" -m "$GGUF" -ngl 99 --host 127.0.0.1 --port "$PORT" -c 2048 --jinja > "$SRVLOG" 2>&1 &
 SERVER_PID=$!
 READY=0
