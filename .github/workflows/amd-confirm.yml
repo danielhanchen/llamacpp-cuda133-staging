@@ -1,0 +1,72 @@
+name: amd-confirm
+
+# Exercise the AMD ROCm/HIP confirm scripts on GitHub-hosted runners, which have
+# no AMD GPU. The scripts therefore auto-detect "no ROCm" and fall back to the
+# upstream CPU build, which CAN reach RESULT: CONFIRMED (CPU). This validates the
+# detection + selection + download + extract + run plumbing; real ROCm/HIP
+# offload still needs a real AMD GPU.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/amd-confirm.yml
+      - amd_confirm.sh
+      - amd_confirm.ps1
+
+jobs:
+  linux:
+    name: ubuntu-amd (cpu-fallback)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n
+        run: bash -n amd_confirm.sh && echo OK
+      - name: Run amd_confirm.sh (no AMD GPU -> CPU fallback)
+        run: |
+          set -o pipefail
+          bash amd_confirm.sh 2>&1 | tee confirm_output.txt
+      - name: Assert CPU build CONFIRMED
+        run: |
+          if grep -q "RESULT: CONFIRMED" confirm_output.txt && grep -q "CPU prebuilt runs on this box" confirm_output.txt; then
+            echo "OK: ubuntu auto-selected and confirmed the CPU build (no AMD GPU on runner)"
+          else
+            echo "::error::ubuntu did not confirm the CPU fallback"
+            grep -E "RESULT:|PASS:|FAIL:|\[FAIL\]|selection :" confirm_output.txt || true
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: amd-confirm-ubuntu, path: confirm_output.txt, if-no-files-found: warn }
+
+  windows:
+    name: windows-amd (cpu-fallback)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse-check
+        shell: pwsh
+        run: |
+          $t=$null; $e=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./amd_confirm.ps1).Path, [ref]$t, [ref]$e)
+          if ($e.Count) { $e | ForEach-Object { Write-Host $_.Message }; exit 1 } else { Write-Host "PARSE OK" }
+      - name: Run amd_confirm.ps1 (no AMD GPU -> CPU fallback)
+        shell: pwsh
+        run: ./amd_confirm.ps1 *>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE/confirm_output.txt"
+      - name: Assert CPU build CONFIRMED
+        shell: pwsh
+        run: |
+          $log = Get-Content "$env:GITHUB_WORKSPACE/confirm_output.txt" -Raw
+          if ($log -match 'RESULT: CONFIRMED' -and $log -match 'CPU prebuilt runs on this box') {
+            Write-Host "OK: windows auto-selected and confirmed the CPU build (no AMD GPU on runner)"
+          } else {
+            Write-Host "::error::windows did not confirm the CPU fallback"
+            ($log -split "`n" | Select-String -Pattern 'RESULT:|PASS:|FAIL:|\[FAIL\]|selection :') | ForEach-Object { Write-Host $_.Line }
+            exit 1
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: amd-confirm-windows, path: confirm_output.txt, if-no-files-found: warn }
