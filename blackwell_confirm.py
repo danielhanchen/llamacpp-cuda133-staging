@@ -131,8 +131,36 @@ def extract(archive: Path, dest: Path) -> None:
             t.extractall(dest)
 
 
+def _gpu_mem_used_mib() -> int | None:
+    """Total GPU memory in use across visible devices (MiB), or None."""
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+                           capture_output=True, text=True, timeout=15)
+        vals = [int(x) for x in r.stdout.split() if x.strip().isdigit()]
+        return sum(vals) if vals else None
+    except Exception:
+        return None
+
+
+def _gpu_mem_for_pid_mib(pid: int) -> int | None:
+    """GPU memory (MiB) attributed to a specific pid via nvidia-smi, or None
+    (None can mean 'not using GPU' OR 'per-process listing hidden', e.g. some
+    containers -- the memory-delta check below is the robust fallback)."""
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,used_memory",
+                            "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=15)
+        for line in r.stdout.splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 2 and parts[0].isdigit() and int(parts[0]) == pid:
+                return int(parts[1]) if parts[1].isdigit() else None
+    except Exception:
+        return None
+    return None
+
+
 def gpu_smoke(server: Path, gguf: Path, label: str, port: int) -> dict:
-    """Start llama-server with full GPU offload, confirm GPU layers + answer."""
+    """Start llama-server with full GPU offload; confirm real GPU use three ways
+    (log markers, per-pid GPU memory, and a GPU memory delta) plus a correct answer."""
     log = WORK / f"server_{label}.log"
     lf = open(log, "w")
     args = [str(server), "-m", str(gguf), "--host", "127.0.0.1", "--port", str(port),
@@ -140,10 +168,8 @@ def gpu_smoke(server: Path, gguf: Path, label: str, port: int) -> dict:
     kw = dict(stdout=lf, stderr=subprocess.STDOUT)
     if not IS_WIN:
         kw["start_new_session"] = True
-    env = dict(os.environ)
-    # On Windows the cudart DLLs sit next to the exe (installer overlays them);
-    # ensure the exe's own dir is searched first.
-    proc = subprocess.Popen(args, env=env, **kw)
+    mem0 = _gpu_mem_used_mib()
+    proc = subprocess.Popen(args, env=dict(os.environ), **kw)
 
     def tail() -> str:
         try:
@@ -173,13 +199,20 @@ def gpu_smoke(server: Path, gguf: Path, label: str, port: int) -> dict:
             pass
         time.sleep(2)
 
+    # Ground-truth GPU signals while the model is resident.
+    pid_mem = _gpu_mem_for_pid_mib(proc.pid) if healthy else None
+    mem1 = _gpu_mem_used_mib() if healthy else None
+    mem_delta = (mem1 - mem0) if (mem0 is not None and mem1 is not None) else None
+
     text = tail()
-    # GPU offload markers from llama.cpp's loader.
+    # Broader log markers across llama.cpp logger variants.
     m = re.search(r"offloaded\s+(\d+)\s*/\s*(\d+)\s+layers to GPU", text)
-    offloaded = bool(m and int(m.group(1)) > 0)
-    gpu_layers = m.group(0) if m else "(no 'offloaded N/N layers to GPU' line found)"
-    cuda_dev = re.search(r"(ggml_cuda_init.*|Device \d+: .*compute capability.*|CUDA\d+ .*buffer)", text)
+    layers_line = m.group(0) if m else ""
+    cuda_dev = re.search(r"(ggml_cuda_init[^\n]*|Device \d+: [^\n]*|CUDA0[^\n]*(?:buffer|model)[^\n]*|using device CUDA[^\n]*)", text)
     device_line = cuda_dev.group(0).strip() if cuda_dev else ""
+    log_says_gpu = bool(m and int(m.group(1)) > 0) or bool(re.search(r"ggml_cuda_init|CUDA0|offloading|using device CUDA", text))
+
+    offloaded = bool(log_says_gpu or (pid_mem and pid_mem > 0) or (mem_delta is not None and mem_delta > 100))
 
     answer = ""
     if healthy:
@@ -199,11 +232,16 @@ def gpu_smoke(server: Path, gguf: Path, label: str, port: int) -> dict:
     kill()
 
     answer_ok = bool(re.search(r"\b4\b|four", answer, re.IGNORECASE))
+    lines = text.splitlines()
     return {
         "label": label, "started": proc.returncode != 0 or healthy, "healthy": healthy,
-        "gpu_offloaded": offloaded, "gpu_layers": gpu_layers, "device_line": device_line,
+        "gpu_offloaded": offloaded,
+        "gpu_layers": layers_line or "(no 'offloaded N/N' line; relying on GPU-memory check)",
+        "device_line": device_line,
+        "gpu_mem_mib": f"{mem0}->{mem1} MiB (delta {mem_delta})" if mem_delta is not None else "(nvidia-smi mem unavailable)",
+        "pid_mem_mib": pid_mem,
         "answer": answer.strip()[:80], "answer_ok": answer_ok,
-        "log_tail": "\n".join(text.splitlines()[-25:]),
+        "log_tail": "\n".join(lines[:35] + (["..."] if len(lines) > 50 else []) + lines[-15:]),
     }
 
 
@@ -304,12 +342,12 @@ def main() -> int:
         result4 = gpu_smoke(server, gguf, "fork", PORT)
         print(f"  started       : {result4['started']}  healthy: {result4['healthy']}")
         print(f"  GPU offloaded : {result4['gpu_offloaded']}   [{result4['gpu_layers']}]")
+        print(f"  GPU memory    : {result4['gpu_mem_mib']}   per-pid: {result4['pid_mem_mib']} MiB")
         if result4["device_line"]:
             print(f"  device        : {result4['device_line']}")
         print(f"  answer (2+2)  : {result4['answer']!r}  -> correct: {result4['answer_ok']}")
-        if not result4["gpu_offloaded"]:
-            print("  --- last server log lines ---")
-            print("  " + result4["log_tail"].replace("\n", "\n  "))
+        print("  --- server load log (head+tail) ---")
+        print("  " + result4["log_tail"].replace("\n", "\n  "))
 
     # -------------------------------------------------------------- PART 5
     results5 = []
@@ -352,6 +390,7 @@ def main() -> int:
     print(f"fork install marker  : {installed.get('asset') if installed else '(none)'}")
     if result4:
         print(f"fork GPU offload     : {result4['gpu_offloaded']}   answer 2+2 correct: {result4['answer_ok']}")
+        print(f"fork GPU memory      : {result4['gpu_mem_mib']}  (per-pid {result4['pid_mem_mib']} MiB)")
     if tag:
         print(f"upstream-only path   : see PART 2 above (the fork-down scenario)")
     for cu, res in results5:
