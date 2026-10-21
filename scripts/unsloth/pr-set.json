@@ -1,0 +1,42 @@
+{
+  "_doc": [
+    "ggml-org/llama.cpp or unslothai/llama.cpp PRs to merge into the nightly prebuilds. Each entry",
+    "pins an exact commit -- copy the url of the commit you reviewed from the PR's commits tab:",
+    "  https://github.com/ggml-org/llama.cpp/pull/15926/commits/59a3d0cb8f611aa3110ecea3d0afd16b1b18ee06",
+    "Only that commit is built, even if the author keeps pushing; update the pin to take newer code.",
+    "An empty list is a plain upstream build.",
+    "Closed and merged PRs are STILL merged in. Upstream tags lag their merges and the base is",
+    "aged a further UNSLOTH_LLAMA_MIN_RELEASE_AGE_HOURS, so a pin dropped on merge leaves its arch",
+    "in neither the base nor the mix. Once the base tag contains the commit the merge is an empty",
+    "no-op ONLY if upstream took the PR as a merge commit. Upstream usually squashes, and a squash",
+    "is not an ancestor of the pinned commit, so the merge re-applies code the base already has and",
+    "the whole build stops on an unresolvable conflict. Delete the entry once a base tag carries the",
+    "work, do not wait for it to rot away. A closed-unmerged pin ships code upstream",
+    "declined -- the resolve log warns, but nothing else stops it, so prune those deliberately.",
+    "Use {\"url\": \"...\", \"required\": false} for an entry that should be skipped once it is not open.",
+    "Merging an unslothai PR into fork master drops it from the nightly (the tree is the upstream",
+    "tag + pins), so keep its pin listed until the change lands upstream."
+  ],
+  "prs": [
+    "https://github.com/ggml-org/llama.cpp/pull/24423/commits/dd7f73b19deb9e79dd441904cf0158af459cd034",
+    "https://github.com/ggml-org/llama.cpp/pull/25731/commits/534c32182487ee3277908a91dd02f6d8e8ac7ed4",
+    "https://github.com/unslothai/llama.cpp/pull/70/commits/883f2c9ba78f3847148454adf025da29385fff3e",
+    "https://github.com/unslothai/llama.cpp/pull/61/commits/05a66933fc06f6b2eda2288caf506e09f400ed2b",
+    "https://github.com/unslothai/llama.cpp/pull/95/commits/496a8a646f19b244b5e2eaf4cf64f920ed31c1a3",
+    "https://github.com/unslothai/llama.cpp/pull/158/commits/fb9b9462041ad58cde9a274e7984c3c6fb01b279",
+    "https://github.com/unslothai/llama.cpp/pull/157/commits/6c6da89266ba7839d825c9997782af4f4d26b81b",
+    "https://github.com/unslothai/llama.cpp/pull/149/commits/efa8b0e689ac8ba13f5840d9c26aa227ffd07153",
+    "https://github.com/unslothai/llama.cpp/pull/176/commits/e2519ebc09468b477847a7529834a8da998ed2da",
+    "https://github.com/unslothai/llama.cpp/pull/239/commits/bec216444552a20bc39bf2156fa5396154970608",
+    "https://github.com/unslothai/llama.cpp/pull/240/commits/08490ff691719724dc7e37b23ad3a95d815fc99c",
+    "https://github.com/unslothai/llama.cpp/pull/241/commits/7fa42ff5efb5388ed8f47cec7bce4f8fa7dfe546",
+    "https://github.com/unslothai/llama.cpp/pull/243/commits/43521db754e98eaa2b20362ae994b006588ac588",
+    "https://github.com/unslothai/llama.cpp/pull/251/commits/d466df9211feb3e37d8163ebc6d17bc1be8af189",
+    "https://github.com/unslothai/llama.cpp/pull/270/commits/7968eda613e427ad5ccbab61df43246a9a82c53a",
+    "https://github.com/unslothai/llama.cpp/pull/264/commits/5bb68456bc34238cedb50c8683495c6d6f924177",
+    "https://github.com/unslothai/llama.cpp/pull/266/commits/88035b0f74d0fd076df2012a957950fee0c4615f",
+    "https://github.com/unslothai/llama.cpp/pull/283/commits/644ca7d817b8a591c61dee2e17778b43b1ecf3eb",
+    "https://github.com/unslothai/llama.cpp/pull/287/commits/22fb037b1b84513e141d724bb9403ecb48925e32",
+    "https://github.com/unslothai/llama.cpp/pull/298/commits/9d907b7cfe0e41b03272e952a57b933c9fa08757"
+  ]
+}
