@@ -85,7 +85,7 @@ env:
   UNSLOTH_LLAMA_MIN_RELEASE_AGE_HOURS: "6"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.inputs.tag || 'scheduled' }}-eqshard3
+  group: ${{ github.workflow }}-${{ github.event.inputs.tag || 'scheduled' }}-eqshard4
   # A nightly still in flight when the next one starts is stuck, not busy: a
   # healthy run finishes in a couple of hours. Leaving this false lets one
   # wedged run block every following nightly with nothing to show for it.
@@ -1250,11 +1250,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
-          if bash scripts/unsloth/wait_for_jobs.sh --exclude 'Finalize: prune, reclaim, report' --deadline-min 335 --poll 120 \
-               --out "$RUNNER_TEMP/jobs.tsv"; then
-            step="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100&filter=latest" \
-              --jq '.jobs[] | select(.name == "Assemble metadata + publish") | .steps[] | select(.name == "Publish GitHub release") | .conclusion' | head -1)"
-            if [ "$step" = success ]; then published=true; else published=false; fi
+          # --require: until assemble's record exists the visible list can be complete but partial.
+          if bash scripts/unsloth/wait_for_jobs.sh --exclude 'Finalize: prune, reclaim, report' \
+               --require 'Assemble metadata + publish' --deadline-min 335 --poll 120 --out "$RUNNER_TEMP/jobs.tsv"; then
+            # A failed lookup is `unknown`, never `false`: false takes the unpublished delete path.
+            if steps="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100&filter=latest" \
+                  --jq '.jobs[] | select(.name == "Assemble metadata + publish") | .steps[] | select(.name == "Publish GitHub release") | .conclusion')"; then
+              if [ "$(printf '%s\n' "$steps" | head -1)" = success ]; then published=true; else published=false; fi
+            else
+              published=unknown
+            fi
           else
             rc=$?
             published=unknown
@@ -1423,7 +1428,7 @@ jobs:
           wait_rc="${WAIT_RC:-1}"
           FAILED="$(awk -F'\t' 'NF && index($1, " / warm ") == 0 && $1 != "Prune superseded ccache generations" \
                      && ($2 != "completed" || ($3 != "success" && $3 != "skipped")) \
-                     { printf "%s%s (%s)", sep, $1, ($2 == "completed" ? $3 : $2); sep = ", " }' "$jobs" 2>/dev/null)"
+                     { printf "%s%s (%s)", sep, $1, ($2 == "completed" ? $3 : $2); sep = ", " }' "$jobs" 2>/dev/null || true)"
           [ "$wait_rc" -eq 0 ] || FAILED="${FAILED:+$FAILED, }wait for the run's jobs (exit $wait_rc)"
           # 'skipped' is healthy: a scheduled no-op skips every build job.
           # 'cancelled' is not. On 08-05 every build passed and the publish job
